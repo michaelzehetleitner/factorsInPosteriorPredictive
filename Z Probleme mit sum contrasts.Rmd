@@ -118,7 +118,7 @@ Der Plot
 ```{r}
 library(modelr)
 dataGrid <- dat %>%
-  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 101),
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 71),
                     MFQ_AUTHORITY_z = 0,
                     MFQ_FAIRNESS_z = 0,
                     MFQ_HARM_z   = 0,
@@ -128,12 +128,21 @@ dataGrid <- dat %>%
                     GENDER_SUM = 0,
                     
   )
-dataGrid$MFQ_LIBERTY_z <- seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid))
+dataGrid$MFQ_LIBERTY_z <- round(seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid)), digits = 2)
 
 ```
+Was wird für ein grand mean erwartet?
+```{r}
+dat %>% 
+  select(c(GENDER_f, EDUCATION_f, AGE_f, DEC_GROUP)) %>%
+             group_by(GENDER_f, EDUCATION_f, AGE_f) %>%
+   summarise(MDEC = mean(DEC_GROUP=="supporter"))
+```
+
+
 ```{r}
 jj <- dataGrid  %>%
-    add_epred_draws(total.effect.model, re_formula = DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z)%>%
+    add_epred_draws(total.effect.model)%>%
     ungroup() 
   
   ribbonPlot <- jj %>%
@@ -149,6 +158,110 @@ jj <- dataGrid  %>%
     theme(text = element_text(size = 20))  #+
     #geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
   ribbonPlot
+  
+```
+
+```{r}
+
+  # Der gand mean der Vorhersage:
+  jj %>%
+    filter(MFQ_LIBERTY_z == 0) %>%
+    summarise(expectedMean = mean(.epred, na.rm = TRUE)) %>%
+  mutate(realMean = mean(dat$DEC_GROUP == "supporter"))
+```
+# Jetzt nur mit Gender aber sum contrast
+
+
+Umcodieren:
+```{r}
+dat$GENDER_FACTOR_SUM <- dat$GENDER_f
+contrasts(dat$GENDER_FACTOR_SUM) <- c(-1, 1)
+contrasts(dat$GENDER_FACTOR_SUM)
+table(dat$GENDER_f, dat$GENDER_FACTOR_SUM)
+
+```
+
+```{r}
+formulaf.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z  + background_politicsLeftRight_z  + GENDER_FACTOR_SUM)
+```
+Den Fit ausführen
+```{r}
+# Falls du nicht fitten willst, kannst du das fit Objekt laden
+#total.effect.model <- readRDS("total-effect-model.rds")
+total.effect.model.sum <- brm(formulaf.f2,
+                data = dat, 
+                family = bernoulli,
+                prior(normal(0, 20), class = b),
+                iter = 10000, 
+                cores = 4, 
+                chains = 4,
+                seed = 24,
+                save_pars = save_pars(all = TRUE),
+                silent = TRUE,
+                #silent = FALSE,
+                file = "total-effect-model-sumcodedGender.rds",
+                #threads = threading(7),
+                #backend = "cmdstanr"
+      )
+```
+Summary:
+```{r}
+summary(total.effect.model.sum)
+```
+Der Plot
+```{r}
+library(modelr)
+dataGrid <- dat %>%
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 71),
+                    MFQ_AUTHORITY_z = 0,
+                    MFQ_FAIRNESS_z = 0,
+                    MFQ_HARM_z   = 0,
+                    MFQ_PURITY_z = 0,
+                    MFQ_INGROUP_z = 0,
+                    background_politicsLeftRight_z = 0,
+                    GENDER_SUM = 0,
+                    
+  )
+dataGrid$MFQ_LIBERTY_z <- round(seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid)), digits = 2)
+
+```
+Was wird für ein grand mean erwartet?
+```{r}
+dat %>% 
+  select(c(GENDER_f, EDUCATION_f, AGE_f, DEC_GROUP)) %>%
+             group_by(GENDER_f, EDUCATION_f, AGE_f) %>%
+   summarise(MDEC = mean(DEC_GROUP=="supporter"))
+```
+
+
+```{r}
+jj <- dataGrid  %>%
+    add_epred_draws(total.effect.model)%>%
+    ungroup() 
+  
+  ribbonPlot <- jj %>%
+    select(c(MFQ_LIBERTY_z, .epred)) %>%
+    ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+    stat_lineribbon( alpha = 1/5) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2")+
+    theme_bw() + 
+    xlim(c(-3.5, 3.5)) + 
+    ylim(c(0,1)) + 
+    ylab("epred of Vaccination Decision") +
+    theme(text = element_text(size = 20))  #+
+    #geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
+  ribbonPlot
+  
+```
+
+```{r}
+
+  # Der gand mean der Vorhersage:
+  jj %>%
+    filter(MFQ_LIBERTY_z == 0) %>%
+    summarise(expectedMean = mean(.epred, na.rm = TRUE)) %>%
+  mutate(realMean = mean(dat$DEC_GROUP == "supporter"))
 ```
 
 # Das Plot Problem
