@@ -78,6 +78,79 @@ total.effect.model <- brm(formulaf.f2,
                 #backend = "cmdstanr"
       )
 ```
+
+# Der Fit mit numerisch sum-coded gender predictor
+
+Umcodieren:
+```{r}
+dat <- dat  %>% 
+  mutate(GENDER_SUM = ifelse(GENDER_f == "female", -1, 1))
+table(dat$GENDER_f, dat$GENDER_SUM)
+```
+
+```{r}
+formulaf.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z  + background_politicsLeftRight_z  + GENDER_SUM)
+```
+Den Fit ausführen
+```{r}
+# Falls du nicht fitten willst, kannst du das fit Objekt laden
+#total.effect.model <- readRDS("total-effect-model.rds")
+total.effect.model.sum <- brm(formulaf.f2,
+                data = dat, 
+                family = bernoulli,
+                prior(normal(0, 20), class = b),
+                iter = 10000, 
+                cores = 4, 
+                chains = 4,
+                seed = 24,
+                save_pars = save_pars(all = TRUE),
+                silent = TRUE,
+                #silent = FALSE,
+                file = "total-effect-model-sumcodedGender.rds",
+                #threads = threading(7),
+                #backend = "cmdstanr"
+      )
+```
+```{r}
+summary(total.effect.model.sum)
+```
+Der Plot
+```{r}
+library(modelr)
+dataGrid <- dat %>%
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 101),
+                    MFQ_AUTHORITY_z = 0,
+                    MFQ_FAIRNESS_z = 0,
+                    MFQ_HARM_z   = 0,
+                    MFQ_PURITY_z = 0,
+                    MFQ_INGROUP_z = 0,
+                    background_politicsLeftRight_z = 0,
+                    GENDER_SUM = 0,
+                    
+  )
+dataGrid$MFQ_LIBERTY_z <- seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid))
+
+```
+```{r}
+jj <- dataGrid  %>%
+    add_epred_draws(total.effect.model, re_formula = DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z)%>%
+    ungroup() 
+  
+  ribbonPlot <- jj %>%
+    select(c(MFQ_LIBERTY_z, .epred)) %>%
+    ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+    stat_lineribbon( alpha = 1/5) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2")+
+    theme_bw() + 
+    xlim(c(-3.5, 3.5)) + 
+    ylim(c(0,1)) + 
+    ylab("epred of Vaccination Decision") +
+    theme(text = element_text(size = 20))  #+
+    #geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
+  ribbonPlot
+```
+
 # Das Plot Problem
 Set up the predictors
 FRAGE: kann es sein
@@ -185,34 +258,6 @@ dataGrid  %>%
     add_epred_draws(total.effect.model)
 ```
 
-```{r}
-jj <- dataGrid  %>%
-  add_epred_draws(total.effect.model, re_formula = DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z)%>%
-  ungroup() 
-
-ribbonPlot <- jj %>%
-  select(c(MFQ_LIBERTY_z, .epred)) %>%
-  ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
-  stat_lineribbon( alpha = 1/5) +
-  stat_dots(data = dat %>% 
-               select(c(DEC_GROUP, pass, MFQ_LIBERTY_z)),
-            aes(y = pass, 
-                side = ifelse(pass == 0, "top", "bottom"),
-                color = DEC_GROUP),
-            scale = 0.4, shape = 19) +
-  scale_color_manual("Bechdel test", values = c("#009E73", "#D55E00")) +
-  scale_color_brewer(palette = "Dark2") +
-  scale_fill_brewer(palette = "Dark2")+
-  theme_bw() + 
-  xlim(c(-3.5, 3.5)) + 
-  ylim(c(0,1)) + 
-  ylab("epred of Vaccination Decision") +
-  theme(text = element_text(size = 20))  #+
-#geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
-ribbonPlot
-
-
-```
 
 Hast du eine Idee?
 
