@@ -1,0 +1,23 @@
+var_name	transformed	new_name	covariate	label	order_within_family	Family_order	family	rename	order
+age18.29		age18.29		18-29	1	2	Age		21
+age30.39		age30.39		30-39	2	2	Age		22
+age40.49		age40.49		40-49	3	2	Age		23
+age50.59		age50.59		50-59	4	2	Age		24
+age60plus		age60plus		60+	5	2	Age		25
+abitur		abitur		upper	1	4	Education		41
+hauptschule		hauptschule		basic	3	4	Education		43
+mittlereReife		mittlereReife		intermediate	2	4	Education		42
+noEdu		noEdu		none	4	4	Education		44
+covid.infection		covid.infection		Covid infection	3	3	Background		33
+female		female		Female	1	1	Gender		11
+parent		parent		Parent	1	3	Background		31
+vaccinated		vaccinated		Vaccinated	2	3	Background		32
+left.right		left.right		Right leaning	1	5	Politics		51
+AfD		AfD		AfD	2	5	Politics		52
+CDU.CSU		CDU.CSU		Conservatives	3	5	Politics		53
+FDP		FDP		Liberals	4	5	Politics		54
+Greens		Greens		Green Party	5	5	Politics		55
+TheLeft		TheLeft		Left Party	6	5	Politics		56
+SPD		SPD		Social Democrats	7	5	Politics		57
+other.party		other.party		Other party identification	8	5	Politics		58
+diverse		diverse		Diverse	2	1	Gender		12

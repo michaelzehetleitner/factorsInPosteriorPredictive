@@ -1,0 +1,394 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+# Vorbereitung
+Ich habe Probleme mit sum contrasts.
+In meinen posterior predictive plots würde ich für predictor=0 den population mean des outcomes erwarten.
+Setup
+```{r}
+library(tidyverse)
+library(tidybayes)
+library(brms)
+library(ggplot2)
+library(RColorBrewer) # needed for some extra colours in one of the graphs
+library(ggmcmc)
+library(mcmcplots) 
+library(bayesplot)
+```
+
+Lade die Daten
+```{r}
+dat <- readRDS( file = "data/clusteredDataWide.rds")
+# es gibt nur wenig gender == divers und wenig fence-sitter
+# Dadurch wird der outcome Impfentscheidung (DEC_GROUP) sowie gender zu binären Variablen
+dat <- dat %>%
+  filter(DEC_GROUP != "fence-sitter")%>% 
+  filter(GENDER_f != "diverse")%>% 
+  droplevels()
+
+```
+Bilde die sum-contrasts
+```{r}
+# vorher
+print("Vorher")
+contrasts(dat$AGE_f) 
+contrasts(dat$GENDER_f)
+contrasts(dat$EDUCATION_f)
+# Umkodierung
+contrasts(dat$AGE_f) <- contr.sum(5)
+contrasts(dat$GENDER_f) <- contr.sum(2)
+contrasts(dat$EDUCATION_f) <- contr.sum(4)
+#Nachher
+print("Nachher")
+contrasts(dat$AGE_f) 
+contrasts(dat$GENDER_f)
+contrasts(dat$EDUCATION_f)
+```
+
+
+# Der Fit
+
+Die Formel für die logistische Regression.
+- Outcome: Impfentscheidung
+- Predictors: 6 moralische Dimensionen sowie politische Orientierung (alle numerisch basierend auf 5- bzw. 7-stufigen Likertskalen, gemittelt über (Sub-)Skalen und z-transformiert)
+- Covariate: Geschlecht (2 levels), Alter (5 levels), Bildung (4 levels)
+  - sind eigentlich ordered, das berücksichtige ich aber nicht
+  
+```{r}
+formulaf.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z  + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f )
+```
+Den Fit ausführen
+```{r}
+# Falls du nicht fitten willst, kannst du das fit Objekt laden
+#total.effect.model <- readRDS("total-effect-model.rds")
+total.effect.model <- brm(formulaf.f2,
+                data = dat, 
+                family = bernoulli,
+                prior(normal(0, 20), class = b),
+                iter = 10000, 
+                cores = 4, 
+                chains = 4,
+                seed = 24,
+                save_pars = save_pars(all = TRUE),
+                silent = TRUE,
+                #silent = FALSE,
+                file = "total-effect-model.rds",
+                #threads = threading(7),
+                #backend = "cmdstanr"
+      )
+```
+# Das Plot Problem
+Set up the predictors
+FRAGE: kann es sein
+```{r}
+library(modelr)
+dataGrid <- dat %>%
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 101),
+                    MFQ_AUTHORITY_z = 0,
+                    MFQ_FAIRNESS_z = 0,
+                    MFQ_HARM_z   = 0,
+                    MFQ_PURITY_z = 0,
+                    MFQ_INGROUP_z = 0,
+                    background_politicsLeftRight_z = 0,
+                    AGE_f = levels(dat$AGE_f)[1],
+                    GENDER_f = levels(dat$GENDER_f)[1],
+                    EDUCATION_f = levels(dat$EDUCATION_f)[1]
+  )
+dataGrid$MFQ_LIBERTY_z <- seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid))
+
+```
+```{r}
+jj <- dataGrid  %>%
+    add_epred_draws(total.effect.model, re_formula = DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z)%>%
+    ungroup() 
+  
+  ribbonPlot <- jj %>%
+    select(c(MFQ_LIBERTY_z, .epred)) %>%
+    ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+    stat_lineribbon( alpha = 1/5) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2")+
+    theme_bw() + 
+    xlim(c(-3.5, 3.5)) + 
+    ylim(c(0,1)) + 
+    ylab("epred of Vaccination Decision") +
+    theme(text = element_text(size = 20))  #+
+    #geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
+  ribbonPlot
+```
+```{r}
+jjj <- as.numeric(dat$DEC_GROUP)
+jjj <- jjj == 2
+dec.mean <- mean(jjj)
+```
+
+Man sieht hier, dass für MFQ_LIBERTY_z = 0 P(Vaccination | liberty) ungefähr 0.8 ist. Der Mittelwert der Entscheidung ist aber `r round(dec.mean, digits = 2)`.
+
+Ich habe versucht mit dem Parameter re_formula über die Kovariaten zu marginalisieren: `re_formula = DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z`
+
+Man sieht auch, dass die Kovariaten auf jung, male, gebildet gesetzt sind:
+```{r}
+head(jj)
+```
+Die Faktoren sind ja jetzt sumkodiert, vielleicht kann ich `re_formula` weglassen?
+```{r}
+
+dataGrid <- dat %>%
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 101),
+                    MFQ_AUTHORITY_z = 0,
+                    MFQ_FAIRNESS_z = 0,
+                    MFQ_HARM_z   = 0,
+                    MFQ_PURITY_z = 0,
+                    MFQ_INGROUP_z = 0,
+                    background_politicsLeftRight_z = 0,
+                    AGE_f = levels(dat$AGE_f)[1],
+                    GENDER_f = levels(dat$GENDER_f)[1],
+                    EDUCATION_f = levels(dat$EDUCATION_f)[1]
+  )
+dataGrid$MFQ_LIBERTY_z <- seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid))
+
+```
+```{r}
+jj <- dataGrid  %>%
+    add_epred_draws(total.effect.model)%>%
+    ungroup() 
+  
+  ribbonPlot <- jj %>%
+    select(c(MFQ_LIBERTY_z, .epred)) %>%
+    ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+    stat_lineribbon( alpha = 1/5) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2")+
+    theme_bw() + 
+    xlim(c(-3.5, 3.5)) + 
+    ylim(c(0,1)) + 
+    ylab("epred of Vaccination Decision") +
+    theme(text = element_text(size = 20))  #+
+    #geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
+  ribbonPlot
+```
+Das macht auch keinen Unterschied.
+Wenn ich die Faktoren aus der Variablenmatrix für `add_epred_draw` weglasse, klappt das Ziehen der predictions nicht:
+```{r}
+dataGrid <- dat %>%
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 101),
+                    MFQ_AUTHORITY_z = 0,
+                    MFQ_FAIRNESS_z = 0,
+                    MFQ_HARM_z   = 0,
+                    MFQ_PURITY_z = 0,
+                    MFQ_INGROUP_z = 0
+  )
+dataGrid$MFQ_LIBERTY_z <- seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid))
+
+dataGrid  %>%
+    add_epred_draws(total.effect.model)
+```
+
+```{r}
+jj <- dataGrid  %>%
+  add_epred_draws(total.effect.model, re_formula = DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z)%>%
+  ungroup() 
+
+ribbonPlot <- jj %>%
+  select(c(MFQ_LIBERTY_z, .epred)) %>%
+  ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+  stat_lineribbon( alpha = 1/5) +
+  stat_dots(data = dat %>% 
+               select(c(DEC_GROUP, pass, MFQ_LIBERTY_z)),
+            aes(y = pass, 
+                side = ifelse(pass == 0, "top", "bottom"),
+                color = DEC_GROUP),
+            scale = 0.4, shape = 19) +
+  scale_color_manual("Bechdel test", values = c("#009E73", "#D55E00")) +
+  scale_color_brewer(palette = "Dark2") +
+  scale_fill_brewer(palette = "Dark2")+
+  theme_bw() + 
+  xlim(c(-3.5, 3.5)) + 
+  ylim(c(0,1)) + 
+  ylab("epred of Vaccination Decision") +
+  theme(text = element_text(size = 20))  #+
+#geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
+ribbonPlot
+
+
+```
+
+Hast du eine Idee?
+
+
+# Cooler plot
+```{r}
+library(broom)
+fit <- total.effect.model
+tidy(fit) %>% 
+  knitr::kable()
+```
+```{r}
+dat <- dat  %>% 
+  mutate(pass = ifelse(DEC_GROUP == "rejecter", 0, 1)) 
+
+# compare
+dat %>% 
+  select(DEC_GROUP, pass) %>% 
+  head()
+
+```
+```{r}
+library(broom.mixed)
+fit <- total.effect.model
+broom.mixed::tidy(fit) %>% 
+  knitr::kable()
+```
+```{r}
+c(coef(fit)[2], confint(fit)[2, ]) * 1e8
+```
+```{r}
+nd <- tibble(dat = seq(from = 0, to = 500000000, length.out = 100))
+```
+
+
+```{r}
+library(ggdist)
+
+p <-
+  # compute the fitted lines and SE's
+  predict(total.effect.model,
+          effects = "fixed",
+          newdata = nd,
+          type = "link",
+          se.fit = TRUE) %>% 
+  # wrangle
+  data.frame() %>% 
+  mutate(ll = fit - 1.96 * se.fit,
+         ul = fit + 1.96 * se.fit) %>% 
+  select(-residual.scale, -se.fit) %>% 
+  mutate_all(plogis) %>%
+  bind_cols(dat)
+
+# what have we done?
+glimpse(p)
+```
+
+
+# Some diagnostics
+Following https://www.rensvandeschoot.com/brms-wambs/
+```{r}
+prior_summary(total.effect.model)
+```
+
+```{r}
+np <- nuts_params(total.effect.model)
+lp <- log_posterior(total.effect.model)
+
+color_scheme_set("brightblue")
+mcmc_nuts_divergence(np, lp)
+```
+```{r}
+mcmc_nuts_stepsize(np, lp)
+```
+```{r}
+mcmc_nuts_energy(np)
+```
+
+
+Trace plots
+```{r}
+model <- total.effect.model
+modeltranformed <- ggs(model) # the ggs function transforms the BRMS output into a longformat tibble, that we can use to make different types of plots.
+```
+
+```{r}
+ggplot(filter(modeltranformed, Parameter %in% c("b_intercept", "b_attitude_z", "b_MFQ_AUTHORITY_z", "b_MFQ_LIBERTY_z", "b_EDUCATION_f2", "b_AGE_f30M39"),
+              Iteration > 1000),
+       aes(x   = Iteration,
+           y   = value, 
+           col = as.factor(Chain)))+
+  geom_line()+
+  facet_grid(Parameter ~ .,
+             scale  = 'free_y',
+             switch = 'y')+
+  labs(title = "Caterpillar Plots",
+       col   = "Chains")
+mcmc_plot(model, type = "trace")
+```
+Gelman diagnostics
+```{r}
+modelposterior <- as.mcmc(model) # with the as.mcmc() command we can use all the CODA package convergence statistics and plotting options
+gelman.diag(modelposterior[, 1:16])
+gelman.plot(modelposterior[, 1:16])
+```
+Geweke
+```{r}
+geweke.diag(modelposterior[, 1:16])
+```
+```{r}
+geweke.plot(modelposterior[, 1:16])
+```
+
+Do the posteriors have enough information
+```{r}
+stanplot(model, type = "hist")
+```
+
+Autocorrelation?
+```{r}
+autocorr.diag(modelposterior[,1:16], lags = c(0, 1,2,3,4, 5, 10, 50))
+```
+
+
+```{r}
+ggplot(filter(modeltranformed, Parameter %in% c("b_intercept", "b_attitude_z", "b_MFQ_AUTHORITY_z", "b_MFQ_LIBERTY_z", "b_EDUCATION_f2", "b_AGE_f30M39"), 
+              Iteration > 1000),
+       aes(x    = value,
+           fill = Parameter))+
+  geom_density(alpha = .5)+
+  geom_vline(xintercept = 0,
+             col        = "red",
+             size       = 1)+
+  scale_x_continuous(name   = "Value",
+                     limits = c(-3, 3))+ 
+  theme_light()+
+  labs(title = "Posterior Density of Parameters")
+```
+Do priors change the results
+```{r}
+modeldifferentMVpriors <- brm(formulaf.f2,
+                              data = dat, 
+                              family = bernoulli,
+                              prior(normal(0, 10), class = b),
+                              iter = 10000, 
+                              cores = 4, 
+                              chains = 4,
+                              seed = 24,
+                              save_pars = save_pars(all = TRUE),
+                              silent = TRUE,
+                              #silent = FALSE,
+                              file = "total-effect-model-other-prior.rds",
+                              #threads = threading(7),
+                              #backend = "cmdstanr"
+                              sample_prior  = TRUE)
+summary(modeldifferentMVpriors)
+
+```
+Differences?
+```{r}
+round(100*((summary(modeldifferentMVpriors)$fixed - summary(model)$fixed) / summary(model)$fixed), 3)[,"Estimate"]
+```
+I think yes, what to do now?
+# https://paul-buerkner.github.io/brms/reference/pp_check.brmsfit.html
+
+
+```{r}
+fit <- total.effect.model
+pp_check(fit)  # shows dens_overlay plot by default
+pp_check(fit, type = "error_hist", ndraws = 11)
+pp_check(fit, type = "scatter_avg", ndraws = 100)
+pp_check(fit, type = "stat_2d")
+pp_check(fit, type = "rootogram")
+pp_check(fit, type = "loo_pit")
+
+## get an overview of all valid types
+pp_check(fit, type = "xyz")
+```
+
