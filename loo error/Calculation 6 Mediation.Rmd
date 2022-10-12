@@ -1,0 +1,332 @@
+---
+title: "Calculation 6 - Mediation Analysis"
+author: "Michael Zehetleitner"
+date: "2022-09-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+```
+
+
+
+```{r}
+#stopCluster(cl)
+library(bayestestR)
+library(tidyverse)
+library(brms)
+#library(doMC)
+#registerDoMC(30)
+library(foreach)
+library(doParallel)
+#registerDoParallel(30)
+#library(parallel)
+cl <- makeCluster(detectCores() - 1, outfile = "parallelLog.txt")
+#cl
+#library(doParallel)
+registerDoParallel(cl)
+```
+
+
+# BRMS
+- mediator = COVCI + BVIS + VCI
+## Read in the data
+Things to tweak:
+- number of iterations: first block
+- priors: prior(normal(0, 20), class = b) in three model fit calls
+- parallel vs. normal for loop: comment out `forach...` and `i <- as.numeric(...)` and uncomment the for loop in block three
+
+The error - if it occurs - occurs in block 3
+```{r}
+listOfIterations <- c(5000)
+dat <- readRDS( file = "data/clusteredDataWide.rds")
+dat <- dat %>%
+  filter(DEC_GROUP != "fence-sitter")%>% 
+  filter(GENDER_f != "diverse")%>% 
+  droplevels()
+
+
+# Attitude is the sum of VCI, COVCI and BVIS
+dat$attitude <- dat$VCI_av + dat$BVIS_av + dat$COVCI_av
+
+dat <- dat %>%
+  mutate(across(attitude, ~{(.x - mean(.x)) / sd(.x)}, .names = '{.col}_z'))  # z transform
+```
+
+
+# Model comparisons
+
+## Create the different prediction formulae
+```{r}
+
+fileNamePathandNameStub <- "fit objects/mediation/mediation comparison"
+fileF <- "full"
+fileFHAPL <- "Rossen and best fair-harm-auth-pur-lib"
+fileHAPL <- "auth-pur-lib Amin"
+fileNull <- "null"
+
+fileNameComponents <- c(fileF, fileFHAPL, fileHAPL, fileNull)
+
+createFileName <- function(path, spec, it, ext){
+  paste(path, spec, format(it, scientific = FALSE), ext)
+}
+
+
+
+# full model 
+formulaF.f1 <- bf(attitude_z ~ MFQ_LIBERTY_z + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f  )
+formulaF.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z + attitude_z + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f )
+
+# Rossen model
+formulaFHAPL.f1 <- bf(attitude_z ~ MFQ_LIBERTY_z + MFQ_HARM_z + MFQ_FAIRNESS_z  + MFQ_AUTHORITY_z + MFQ_PURITY_z + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f  )
+formulaFHAPL.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z  + MFQ_AUTHORITY_z + MFQ_PURITY_z + attitude_z  + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f )
+
+# Amin model
+formulaHAPL.f1 <- bf(attitude_z ~ MFQ_LIBERTY_z    + MFQ_AUTHORITY_z + MFQ_PURITY_z + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f  )
+formulaHAPL.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z     + MFQ_AUTHORITY_z + MFQ_PURITY_z + attitude_z  + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f )
+
+# Null model
+formulaNull.f1 <- bf(attitude_z ~  background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f  )
+formulaNull.f2 <- bf(DEC_GROUP ~  attitude_z  + background_politicsLeftRight_z + AGE_f + GENDER_f + EDUCATION_f )
+
+
+# Formulae in list
+formulas.f1 <- list(formulaF.f1, formulaFHAPL.f1, formulaHAPL.f1, formulaNull.f1)
+formulas.f2 <- list(formulaF.f2, formulaFHAPL.f2, formulaHAPL.f2, formulaNull.f2)
+
+
+```
+## Fit all model combinations
+
+Fit all model combinations in 2 nested loops
+```{r}
+for(k in 1:length(listOfIterations)){ # cycle through 1k, 10k, and 100k iterations
+  iterations <- listOfIterations[k]
+  i <- 0
+  #for(i in 1:length(formulas.f1)) {
+  foreach (n=1:4, .packages = "brms") %dopar% {
+  i <- as.numeric(n)
+  
+    for(j in 1:length(formulas.f2)){
+      
+      print(paste("--------------- i: ", i, " j: ", j, " -----------"))
+      # Fit the multivariate mediation model
+      filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("BOTH att ", fileNameComponents[i], " dec ", fileNameComponents[j]), it = iterations, ext = ".rds")
+      print(filename)
+      f1 <- formulas.f1[[i]]
+      f2 <- formulas.f2[[j]]
+      jj <- brm(f1 + f2 + set_rescor(FALSE),
+                data = dat, 
+                family = c(gaussian, bernoulli),
+                prior(normal(0, 20), class = b), # was always 20 but I read maybe priors too loose: https://discourse.mc-stan.org/t/error-in-validate-ll-log-ratios-all-input-values-must-be-finite/27741
+                iter = iterations, 
+                cores = 4, 
+                chains = 4,
+                seed = 2324,
+                save_pars = save_pars(all = TRUE),
+                save_model = paste(filename, "model.txt"),
+                silent = TRUE,
+                backend = "rstan",
+                file = filename)
+      print("--- about to add_criterion")
+      print(filename)
+      jj <- add_criterion(jj, c("loo", "waic"), moment_match = TRUE, reloo = TRUE)
+      saveRDS(jj, filename)
+      rm(jj)
+      
+      # Fit the decision component for indirect effects
+      filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("DEC ", fileNameComponents[j]), it = iterations, ext = ".rds")
+      print(filename)
+      jj <- brm(f2,
+                data = dat, 
+                family = bernoulli,
+                prior(normal(0, 20), class = b),
+                iter = iterations, 
+                cores = 4, 
+                chains = 4,
+                seed = 224,
+                save_pars = save_pars(all = TRUE),
+                silent = TRUE,
+                backend =  "rstan",
+                file = filename)
+      print("--- about to add_criterion")
+      print(filename)
+      jj <- add_criterion(jj, c("loo", "waic"), moment_match = TRUE, reloo = TRUE)
+      saveRDS(jj, filename)
+      rm(jj)
+      
+      # Fit the attitude component
+      filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("ATT ", fileNameComponents[i]), it = iterations, ext = ".rds")
+      print(filename)
+      jj <- brm(f1 ,
+                data = dat, 
+                family = gaussian,
+                prior(normal(0, 20), class = b),
+                iter = iterations, 
+                cores = 4, 
+                chains = 4,
+                seed = 214,
+                save_pars = save_pars(all = TRUE),
+                silent = TRUE,
+                backend =  "rstan" ,
+                file = filename)
+      print("--- about to add_criterion")
+      print(filename)
+      jj <- add_criterion(jj, c("loo", "waic"), moment_match = TRUE, reloo = TRUE)
+      saveRDS(jj, filename)
+      rm(jj)
+      
+    }
+  }
+}
+```
+
+## Calculate loo and waic for all 16 model combinations
+### Loo the f1+f2 models
+```{}
+for(k in 1:length(listOfIterations)){ # cycle through 1k, 10k, and 100k iterations
+  iterations <- listOfIterations[k]
+ # for(i in 1:length(formulas.f1)) {
+  i <- 0
+  #foreach (n = formulas.f1, .packages = "brms") %do% {
+  foreach (n=1:4, .packages = "brms") %dopar% {
+    i <- as.numeric(n) 
+   #  i <- i+1
+    for(j in 1:length(formulas.f2)){
+      filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("BOTH att ", fileNameComponents[i], " dec ", fileNameComponents[j]), it = iterations, ext = ".rds")
+      print(filename)
+      fit <- readRDS(filename)
+      try({
+        fit <- add_criterion(fit, c("loo", "waic"), moment_match = TRUE, reloo = TRUE)
+        saveRDS(fit, filename)
+        })
+    }
+  }
+}
+```
+
+### Loo the attitude component
+```{}
+for(k in 1:length(listOfIterations)){ # cycle through 1k, 10k, and 100k iterations
+  iterations <- listOfIterations[k]
+  for(i in 1:length(formulas.f1)) {
+#  i <- 0
+ # foreach (n = 1:4, .packages = "brms") %dopar% {
+  #  i <- as.numeric(n)
+    filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("ATT ", fileNameComponents[i]), it = iterations, ext = ".rds")
+    print(filename)
+    jj <- readRDS(filename)
+    jj <- add_criterion(jj, c("loo", "waic"), moment_match = TRUE, reloo = TRUE)
+    saveRDS(jj, filename)
+  }
+}
+```
+
+### Loo the decision component
+```{}
+for(k in 1:length(listOfIterations)){ # cycle through 1k, 10k, and 100k iterations
+  iterations <- listOfIterations[k]
+  for(j in 1:length(formulas.f2)){
+  # foreach (n = 1:4, .packages = "brms") %dopar% {
+   #  j <- as.numeric(n)
+    filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("DEC ", fileNameComponents[j]), it = iterations, ext = ".rds")
+    print(filename)
+    jj <- readRDS(filename)
+    jj <- add_criterion(jj, c("loo", "waic"), moment_match = TRUE, reloo = TRUE)
+    saveRDS(jj, filename)
+    rm(jj)
+  }
+}
+```
+
+
+# Calculate model weights
+Using Bayesian Model Stacking. Takes rather a long computational time.
+## For the multivariate f1+f2 fit
+```{r}
+#listOfIterations <- c(10000)
+fileNamePathandNameStub <- "fit objects/mediation/mediation comparison BOTH"
+fileF <- "full"
+fileFHAPL <- "Rossen and best fair-harm-auth-pur-lib"
+fileHAPL <- "auth-pur-lib Amin"
+fileNull <- "null"
+
+fileNameComponents <- c(fileF, fileFHAPL, fileHAPL, fileNull)
+modelNames <- c(1:16)
+ m <- 1
+ for(i in 1:4) { # there are 4 tested models for the indirect
+    for(j in 1:4){ # and 4 models for the direct effect
+      modelNames[m] <- paste("att ", fileNameComponents[i], " dec ", fileNameComponents[j], sep = "")
+      m <- m + 1
+    }
+ }
+ modelNames
+
+createFileName <- function(path, spec, it, ext){
+  paste(path, spec, it, ext)
+}
+modelList <- list()
+m <- 1
+
+
+for(k in 1:length(listOfIterations)){ # cycle through 1k, 10k, and 100k iterations
+  iterations <- listOfIterations[k]
+  for(i in 1:length(formulas.f1)) {
+  #foreach (n = 1:4, .packages = "brms") %dopar% {
+   # i <- as.numeric(n)
+    for(j in 1:length(formulas.f2)){
+      filename <- createFileName(path = fileNamePathandNameStub, spec =  paste("att ", fileNameComponents[i], " dec ", fileNameComponents[j]), it = iterations, ext = ".rds")
+      print(filename)
+      fit <- readRDS(filename)
+      modelList[[m]] <- fit
+      m <- m + 1
+    }
+  }
+}
+list.files("fit objects/with covariates/")
+getwd()
+modWeight <- model_weights(modelList[[1]], modelList[[2]], modelList[[3]], modelList[[4]], 
+                  modelList[[5]], modelList[[6]], modelList[[7]], modelList[[8]], 
+                  modelList[[9]], modelList[[10]], modelList[[11]],  modelList[[12]],
+                  modelList[[13]], modelList[[14]], modelList[[15]], modelList[[16]],
+                  weights = "stacking")
+saveRDS(modWeight, file = "fit objects/mediation/modelWeightsBOTH.rds")
+```
+## Total, direct, and indirect effects
+
+```{r}
+# Total effects
+total.null <- readRDS(file = "fit objects/with covariates/brmsfit decision cov null 10000 .rds")
+total.aut.pur.lib <- readRDS(file = "fit objects/with covariates/brmsfit decision cov auth-pur-lib Amin 10000 .rds")
+total.harm.fair.auth.pur.lib <- readRDS(file = "fit objects/with covariates/brmsfit decision cov Rossen and best fair-harm-auth-pur-lib 10000 .rds")
+total.full <- readRDS(file = "fit objects/with covariates/brmsfit decision cov full 10000 .rds")
+
+
+# indirect effects
+indirect.null <- readRDS(file = "fit objects/mediation/mediation comparison ATT  null 100000 .rds")
+indirect.aut.pur.lib <- readRDS(file = "fit objects/mediation/mediation comparison ATT  auth-pur-lib Amin 100000 .rds")
+indirect.harm.fair.auth.pur.lib <- readRDS(file = "fit objects/mediation/mediation comparison ATT  Rossen and best fair-harm-auth-pur-lib 100000 .rds")
+indirect.full <- readRDS(file = "fit objects/mediation/mediation comparison ATT  full 100000 .rds")
+
+# direct effects
+direct.null <- readRDS(file = "fit objects/mediation/mediation comparison DEC  null 100000 .rds")
+direct.aut.pur.lib <- readRDS(file = "fit objects/mediation/mediation comparison DEC  auth-pur-lib Amin 100000 .rds")
+direct.harm.fair.auth.pur.lib <- readRDS(file = "fit objects/mediation/mediation comparison DEC  Rossen and best fair-harm-auth-pur-lib 100000 .rds")
+direct.full <- readRDS(file = "fit objects/mediation/mediation comparison DEC  full 100000 .rds")
+
+stackingWeight.total <- model_weights(total.null, total.aut.pur.lib, total.harm.fair.auth.pur.lib, total.full, weights = "stacking")
+stackingWeight.indirect <- model_weights(indirect.null, indirect.aut.pur.lib, indirect.harm.fair.auth.pur.lib, indirect.full, weights = "stacking")
+stackingWeight.direct <- model_weights(direct.null, direct.aut.pur.lib, direct.harm.fair.auth.pur.lib, direct.full, weights = "stacking")
+
+saveRDS(stackingWeight.total, file = "fit objects/mediation/modelWeightsTotal.rds")
+saveRDS(stackingWeight.indirect, file = "fit objects/mediation/modelWeightsIndirect.rds")
+saveRDS(stackingWeight.direct, file = "fit objects/mediation/modelWeightsDirect.rds")
+
+```
+
+```{r}
+stopCluster(cl)
+```
+

@@ -199,7 +199,7 @@ total.effect.model.sum <- brm(formulaf.f2,
                 save_pars = save_pars(all = TRUE),
                 silent = TRUE,
                 #silent = FALSE,
-                file = "total-effect-model-sumcodedGender.rds",
+                file = "total-effect-model-sumcodedFActorGender.rds",
                 #threads = threading(7),
                 #backend = "cmdstanr"
       )
@@ -219,24 +219,19 @@ dataGrid <- dat %>%
                     MFQ_PURITY_z = 0,
                     MFQ_INGROUP_z = 0,
                     background_politicsLeftRight_z = 0,
-                    GENDER_SUM = 0,
+                    GENDER_FACTOR_SUM = 0,
                     
   )
 dataGrid$MFQ_LIBERTY_z <- round(seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid)), digits = 2)
 
 ```
-Was wird für ein grand mean erwartet?
-```{r}
-dat %>% 
-  select(c(GENDER_f, EDUCATION_f, AGE_f, DEC_GROUP)) %>%
-             group_by(GENDER_f, EDUCATION_f, AGE_f) %>%
-   summarise(MDEC = mean(DEC_GROUP=="supporter"))
-```
+paul-buerkner commented on 9 Feb 2019
+This is correct. There is no predictive model for levels of a population-level predictor. Accordingly, new levels can't be supported. Instead, allow_new_levels only applies to group-level effects.
 
 
 ```{r}
 jj <- dataGrid  %>%
-    add_epred_draws(total.effect.model)%>%
+    add_epred_draws(total.effect.model.sum, rele)%>%
     ungroup() 
   
   ribbonPlot <- jj %>%
@@ -548,5 +543,226 @@ pp_check(fit, type = "loo_pit")
 
 ## get an overview of all valid types
 pp_check(fit, type = "xyz")
+```
+
+
+
+# Der Fit mit numerisch sum-coded gender predictor Gewichtet nach Anzahl
+
+
+Umcodieren:
+```{r}
+dat <- dat  %>% 
+  mutate(GENDER_SUM = ifelse(GENDER_f == "female", -1, 1))
+table(dat$GENDER_f, dat$GENDER_SUM)
+```
+
+```{r}
+formulaf.f2 <- bf(DEC_GROUP ~ MFQ_LIBERTY_z  + MFQ_HARM_z + MFQ_FAIRNESS_z + MFQ_INGROUP_z + MFQ_AUTHORITY_z + MFQ_PURITY_z  + background_politicsLeftRight_z  + GENDER_SUM)
+```
+Den Fit ausführen
+```{r}
+# Falls du nicht fitten willst, kannst du das fit Objekt laden
+#total.effect.model <- readRDS("total-effect-model.rds")
+total.effect.model.sum <- brm(formulaf.f2,
+                data = dat, 
+                family = bernoulli,
+                prior(normal(0, 20), class = b),
+                iter = 10000, 
+                cores = 4, 
+                chains = 4,
+                seed = 24,
+                save_pars = save_pars(all = TRUE),
+                silent = TRUE,
+                #silent = FALSE,
+                file = "total-effect-model-sumcodedGender.rds",
+                #threads = threading(7),
+                #backend = "cmdstanr"
+      )
+```
+```{r}
+summary(total.effect.model.sum)
+```
+Der Plot
+```{r}
+library(modelr)
+dataGrid <- dat %>%
+  modelr::data_grid(MFQ_LIBERTY_z = modelr::seq_range(MFQ_LIBERTY_z, n = 71),
+                    MFQ_AUTHORITY_z = 0,
+                    MFQ_FAIRNESS_z = 0,
+                    MFQ_HARM_z   = 0,
+                    MFQ_PURITY_z = 0,
+                    MFQ_INGROUP_z = 0,
+                    background_politicsLeftRight_z = 0,
+                    GENDER_SUM = 0,
+                    
+  )
+dataGrid$MFQ_LIBERTY_z <- round(seq(from = -3.5, to = 3.5, length.out = NROW(dataGrid)), digits = 2)
+
+```
+Was wird für ein grand mean erwartet?
+```{r}
+dat %>% 
+  select(c(GENDER_f, EDUCATION_f, AGE_f, DEC_GROUP)) %>%
+             group_by(GENDER_f, EDUCATION_f, AGE_f) %>%
+   summarise(MDEC = mean(DEC_GROUP=="supporter"))
+```
+
+
+```{r}
+jj <- dataGrid  %>%
+    add_epred_draws(total.effect.model)%>%
+    ungroup() 
+  
+  ribbonPlot <- jj %>%
+    select(c(MFQ_LIBERTY_z, .epred)) %>%
+    ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+    stat_lineribbon( alpha = 1/5) +
+    scale_color_brewer(palette = "Dark2") +
+    scale_fill_brewer(palette = "Dark2")+
+    theme_bw() + 
+    xlim(c(-3.5, 3.5)) + 
+    ylim(c(0,1)) + 
+    ylab("epred of Vaccination Decision") +
+    theme(text = element_text(size = 20))  #+
+    #geom_point(data = dat, aes(x = MFQ_LIBERTY_z, y = attitude_z))  
+  ribbonPlot
+  
+```
+
+```{r}
+
+  # Der gand mean der Vorhersage:
+  jj %>%
+    filter(MFQ_LIBERTY_z == 0) %>%
+    summarise(expectedMean = mean(.epred, na.rm = TRUE)) %>%
+  mutate(realMean = mean(dat$DEC_GROUP == "supporter"))
+```
+
+
+# Sebastian
+```{r}
+dataGrid <- data.frame(MFQ_LIBERTY_z= seq(from = -3.5, to = 3.5, length.out = 75)) %>% 
+  group_by(MFQ_LIBERTY_z) %>%
+  summarise(select(dat,MFQ_HARM_z,MFQ_FAIRNESS_z,MFQ_INGROUP_z,MFQ_AUTHORITY_z,
+                   MFQ_PURITY_z ,background_politicsLeftRight_z,
+                   AGE_f,GENDER_f,EDUCATION_f, GENDER_SUM)) %>%
+  ungroup()
+
+
+
+helper_fct <- function(subdat) {
+  subdat %>% add_epred_draws(total.effect.model, ndraws = 200) %>%
+    ungroup() %>%
+    summarise(.epred = quantile(.epred, p=c(.025, .1, .25, .5, .75, .9, .975)),
+              quant = c(.025, .1, .25, .5, .75, .9, .975), 
+              level= c(.95, .8, .5,0,  .5, .8,.95))
+}
+
+
+jj <- dataGrid %>%
+  group_by(MFQ_LIBERTY_z) %>%
+  summarise(helper_fct(cur_data_all()))
+jj
+```
+Wie das jetzt plotten?
+
+Nächstes:
+```{r}
+jj %>% ungroup() %>%
+   filter(quant==0.5) %>%
+   summarise(expMean = sum(.epred*dnorm(MFQ_LIBERTY_z), na.rm=TRUE)/sum(dnorm(MFQ_LIBERTY_z)))
+```
+
+```{r}
+library(tidyverse)
+dat <- readRDS( file = "data/clusteredDataWide.rds")
+# es gibt nur wenig gender == divers und wenig fence-sitter
+# Dadurch wird der outcome Impfentscheidung (DEC_GROUP) sowie gender zu binären Variablen
+dat <- dat %>%
+  filter(DEC_GROUP != "fence-sitter")%>% 
+  filter(GENDER_f != "diverse")%>% 
+  droplevels()
+
+
+
+library(tidyverse)
+library(tidybayes)
+library(brms)
+library(ggplot2)
+library(RColorBrewer) # needed for some extra colours in one of the graphs
+library(ggmcmc)
+library(mcmcplots) 
+library(bayesplot)
+
+
+total.effect.model <- readRDS("total-effect-model.rds")
+library(modelr)
+dataGrid <- data.frame(MFQ_LIBERTY_z= seq(from = -3.5, to = 3.5, length.out = 75)) %>% 
+  group_by(MFQ_LIBERTY_z) %>%
+  summarise(select(dat,MFQ_HARM_z,MFQ_FAIRNESS_z,MFQ_INGROUP_z,MFQ_AUTHORITY_z,
+                   MFQ_PURITY_z ,background_politicsLeftRight_z,
+                   AGE_f,GENDER_f,EDUCATION_f)) %>%
+  ungroup()
+helper_fct <- function(subdat) {
+  subdat %>% add_epred_draws(total.effect.model, ndraws = 200) %>%
+    ungroup() %>%
+    summarise(.epred = quantile(.epred, p=c(.025, .1, .25, .5, .75, .9, .975)),
+              quant = c(.025, .1, .25, .5, .75, .9, .975), 
+              level= c(.95, .8, .5,0,  .5, .8,.95))
+}
+jj <- dataGrid %>%
+  group_by(MFQ_LIBERTY_z) %>%
+  summarise(helper_fct(cur_data_all()))
+
+### Ich bin mir nicht sicher ob man hier stat_lineribbon noch nehmen kann, aber es tut etwas:
+# ribbonPlot <- jj %>%
+#   select(c(MFQ_LIBERTY_z, .epred)) %>%
+#   ggplot(aes(x = MFQ_LIBERTY_z, y = .epred)) + #y = !!rlang::sym(yAxisVariableName))) +
+#   stat_lineribbon( alpha = 1/5, .width=c(0.3, .6,.9)) +
+#   scale_color_brewer(palette = "Dark2") +
+#   scale_fill_brewer(palette = "Dark2")+
+#   theme_bw() + 
+#   xlim(c(-3.5, 3.5)) + 
+#   ylim(c(0,1)) + 
+#   ylab("epred of Vaccination Decision") +
+#   theme(text = element_text(size = 20))  #+
+# ribbonPlot
+
+temp<- jj %>%
+  mutate(lower_higher = if_else(quant < .5, "lower", "upper")) %>% 
+  pivot_wider(id_cols=c("MFQ_LIBERTY_z","level"), names_from = lower_higher, values_from = .epred) %>%
+  ungroup()
+ribbonPlot <- 
+  ggplot(subset(temp, level > 0), 
+         aes(x = MFQ_LIBERTY_z, ymin = lower, ymax=upper, 
+             group=factor(level, levels=c(0.95, 0.8,.5,0)), 
+             fill=factor(level,  levels=rev(c(0.95, 0.8,.5,0))))) + #y = !!rlang::sym(yAxisVariableName))) +
+  geom_ribbon(alpha=1/4)+
+  geom_line(data = subset(temp, level==0), aes(y=upper), col="black", size=1.2)+
+  scale_fill_brewer(palette = "Dark2", name="level")+
+  theme_bw() + 
+  xlim(c(-3.5, 3.5)) + 
+  ylim(c(0,1)) + 
+  ylab("epred of Vaccination Decision") +
+  theme(text = element_text(size = 20))  #+
+ribbonPlot
+
+
+## Verschiedene Möglichkeiten den MW zu berechnen
+jj %>% ungroup() %>%
+  filter(quant==0.5, 
+         MFQ_LIBERTY_z==0) %>%
+  summarise(expMean = mean(.epred, na.rm=TRUE))
+jj %>% ungroup() %>%
+  filter(quant==0.5) %>%
+  summarise(expMean = mean(.epred, na.rm=TRUE))
+## Der hier sieht am legitimsten aus:
+jj %>% ungroup() %>%
+  filter(quant==0.5) %>%
+  summarise(expMean = sum(.epred*dnorm(MFQ_LIBERTY_z), na.rm=TRUE)/sum(dnorm(MFQ_LIBERTY_z)))
+## Das hier ist der empirische MW:
+mean(dat$DEC_GROUP=="supporter")
+
 ```
 
